@@ -5,7 +5,7 @@ from pylab import *
 import networkx as nx
 import numpy as np
 import matplotlib.pyplot as plt
-import random
+from numpy import random
 import kaleido as kld
 import matplotlib.animation as animation
 from scipy.spatial import distance
@@ -20,7 +20,7 @@ recovered = 0
 
 populationSize = 200
 linkProbability = 0.01
-linkCuttingProb = 0.5
+linkCuttingProb = 0.2
 init_p_infection = 0.3
 init_percent_strict= 0.8    #for regon 1 alone 
 init_percent_none = 0.2  #for region 1 alone
@@ -46,14 +46,16 @@ def update_state_based_on_neighbor(G, node_id):
     node_neighbors = list(G.neighbors(node_id))
     neighbor_status= [G.nodes[node]["status"] for node in node_neighbors]
     count_infected_neighbors = neighbor_status.count("infected")
-    if count_infected_neighbors >= 5:
-        if random.random() < 0.8:
-            G.nodes[node_id]["status"]="infected"
-            G.nodes[node_id]["color"]="red"
-            G.nodes[node_id]["counter"]+=1
-          #days since infection
+    if len(node_neighbors) >1:
+        proportion_of_infected_neighbors = count_infected_neighbors/len(node_neighbors)
+        if proportion_of_infected_neighbors >= 0.5 :
+            if random.random() < 0.8:
+                G.nodes[node_id]["status"]="infected"
+                G.nodes[node_id]["color"]="red"
+                G.nodes[node_id]["counter"]+=1
+              #days since infection
 
-    return G 
+    return G.nodes(data=True)[node_id]
 
 def movement(G,ref_node,crossing_nodes):
 
@@ -68,7 +70,8 @@ def movement(G,ref_node,crossing_nodes):
         if ref_node in crossing_nodes and G.nodes[ref_node]["cut_off"]==False:
             current_cross_node_reg = G.nodes[ref_node]["region"]
             current_nodes_attr = nodes_attributes[ref_node]
-
+            
+            print(f'current node region:{G.nodes[ref_node]["region"]}')
             #remove node from current position and region
             updated_G.remove_node(ref_node)
 
@@ -90,16 +93,49 @@ def movement(G,ref_node,crossing_nodes):
             #update the node region to its new region
             current_nodes_attr["region"]= G.nodes[nodes_for_attachment[0]]["region"]                           
             updated_G.add_node(ref_node, **(current_nodes_attr))
+            print(f'new node region after switching:{updated_G.nodes[ref_node]["region"]}')
 
-        else:
-            new_x = G.nodes[ref_node]["pos"][0]+ np.random.random()
-            new_y = G.nodes[ref_node]["pos"][1]+ np.random.random()
-            updated_G.nodes[ref_node]["pos"]=([new_x, new_y])
+    else:
+        #if it is not a cross node, the node moves randomly and doesnt cross the boundary
+        new_x = G.nodes[ref_node]["pos"][0]+ np.random.random()
+        new_y = G.nodes[ref_node]["pos"][1]+ np.random.random()
+        updated_G.nodes[ref_node]["pos"]=([new_x, new_y])
 
-    return updated_G
+    return updated_G.nodes(data=True)[ref_node]
 
 
-
+def reconnect_node(node_id,G, mobile_nodes):
+    
+    if node_id not in mobile_nodes:
+        node_region = G.nodes[node_id]["region"]
+        #other non infected nodes from the same region
+        other_non_Infected_nodes_from_same_region = [node for node in G.nodes if G.nodes[node]["region"]== node_region and\
+                                                         G.nodes[node]["status"]!="infected"]
+           #randomly choose connections
+        potential_connections = list(np.random.choice(other_non_Infected_nodes_from_same_region, round(0.1*(len(other_non_Infected_nodes_from_same_region)))))
+                                         
+             #reconnect to those nodes
+        for targets in potential_connections:
+            G.add_edge(node_id,targets)
+                                         
+    else:
+         for nodes in G.nodes:
+            other_non_Infected_nodes = [node for node in G.nodes if G.nodes[node]["status"]!="infected"]
+            choose_one_node = list(np.random.choice(other_non_Infected_nodes,1))[0]
+                                    
+             #randomly choose new connections in the region of chosen node
+            potential_connections = [node for node in other_non_Infected_nodes if G.nodes[node]["region"]==G.nodes[choose_one_node]["region"]]
+             
+            #randoly select 20% of the nodes IN THE region as the chosen node
+            n_selections = round(0.2*(len(potential_connections)))
+            #print(f"num selections:{n_selections}")
+            new_connections = list(np.random.choice(potential_connections, size=n_selections))
+                                    
+            for targets in new_connections:
+                G.add_edge(node_id,targets)
+                              
+    return list(G.edges(node_id))
+                               
 
 # all_region1_nodes_list= [node for node in G.nodes() if G.nodes[node]["region"]=="1"]
 # print(f"Nodes in region1: {len(all_region1_nodes_list)}")
@@ -119,7 +155,7 @@ def movement(G,ref_node,crossing_nodes):
 # if mobile_nodes:
 #     for node in mobile_nodes:
 #         G.nodes[node]["moving"]=True                           
-#         print("moving updated")
+#         print("")
 
 # for node in G.nodes:
 #     if G.nodes[node]['region']=="1":
@@ -178,6 +214,7 @@ def initialize():
         G.nodes[node]["moving"]=False
         G.nodes[node]["cut_off"]=False
         G.nodes[node]["counter"]=0
+        G.nodes[node]["days_since_recovery"]=0
         
     # Assign positions to the nodes
     pos = nx.spring_layout(G)
@@ -275,11 +312,18 @@ def update():
 
 #     mobile_nodes_in_reg2 = list(np.random.choice(all_region2_nodes_list, round(0.7*len(all_region2_nodes_list)), replace=False))
 #     print(f"Mobile Nodes in region2: {len(mobile_nodes_in_reg2)}")
-#     mobile_nodes = mobile_nodes_in_reg1.extend(mobile_nodes_in_reg2)
-    
+#     mobile_nodes = mobile_nodes_in_reg1.extend(mobile_nodes_in_reg2) 
+    total_infections=0
+    total_recovery=0
     crossing_nodes1= list(np.random.choice(mobile_nodes_in_reg1,round(0.2*len(mobile_nodes_in_reg1)), replace=False))
     crossing_nodes2= list(np.random.choice(mobile_nodes_in_reg2,round(0.2*len(mobile_nodes_in_reg2)), replace=False))
-    crossing_nodes= crossing_nodes1.extend(crossing_nodes2) 
+    crossing_nodes= crossing_nodes1 + crossing_nodes2 
+    
+    print(f"mobile nodes in 1:{mobile_nodes_in_reg1}")
+    print(f"mobile nodes in 2:{mobile_nodes_in_reg2}")
+    print(f"crossing nodes in 1:{crossing_nodes1}")
+    print(f"crossing nodes in 2:{crossing_nodes2}")
+    print(f"total crossing nodes :{crossing_nodes}")
     
     if crossing_nodes:
         total_crossing_nodes = len(crossing_nodes)     
@@ -301,52 +345,128 @@ def update():
     for node_id in G.nodes: 
             
         if G.nodes[node_id]["status"]=="infected":
-            if nextNetwork.nodes[node_id]["counter"]>= 14:   #recover after 14 days
-                nextNetwork.nodes[node_id]["status"]=="recovered"
-                nextNetwork.nodes[node_id]["color"]=="orange"
+            
+            if G.nodes[node_id]["counter"]>= 14:  #when infected and isolated
+                nextNetwork.nodes[node_id]["status"]="recovered"
+                nextNetwork.nodes[node_id]["color"]="green"
                 nextNetwork.nodes[node_id]["counter"]=0
+                nextNetwork.nodes[node_id]["days_since_recovery"]+=1
                 total_infections-=1
                 total_recovery+=1
+            
             else:
-                nextNetwork.nodes[node_id]["counter"]+=1
+                if random.random() < linkCuttingProb-0.1:
+                    #print(f"link cuting prob:{linkCuttingProb-0.1}")
+                    neighbors= list(G.neighbors(node_id))
+                    if len(neighbors) > 0:
+                        for neighbor_node in neighbors:
+                            if nextNetwork.has_edge(node_id, neighbor_node):
+                                nextNetwork.remove_edge(node_id, neighbor_node) #
+                                #print("got here1 :cut off links")
+                                nextNetwork.nodes[node_id]["cut_off"]=True
+                                nextNetwork.nodes[node_id]["counter"]+=1
+                else:
+                    nextNetwork.nodes[node_id]["counter"]+=1
+                    nextNetwork.nodes[node_id]["cut_off"]=False
+                
+            
+#             if G.nodes[node_id]["cut_off"] and G.nodes[node_id]["status"]=="recovered":
+#                 #rejoin node here
+#                 #check if mobile nodes
+#                 nextNetwork = reconnect_node(node_id,G, mobile_nodes_in_reg1+mobile_nodes_in_reg2).copy()
+                
+              
+#             elif G.nodes[node_id]["counter"]>= 10:   #recover after 14 days
+#                 nextNetwork.nodes[node_id]["status"]="recovered"
+#                 nextNetwork.nodes[node_id]["color"]="green"
+#                 nextNetwork.nodes[node_id]["counter"]=0
+#                 total_infections-=1
+#                 total_recovery+=1
+         
+#             else:
+#                 if random.random() < linkCuttingProb:
+#                     neighbors= list(G.neighbors(node_id))
+#                     for neighbor_node in neighbors:
+#                         if nextNetwork.has_edge(node_id, neighbor_node):
+#                             nextNetwork.remove_edge(node_id, neighbor_node) #
+#                             print("got here :cut off links")
+#                             G.nodes[node_id]["cut_off"]=True               
+                                                  
+
+#                 nextNetwork.nodes[node_id]["counter"]+=1
+#                 print("got here :0")
                                              
         elif G.nodes[node_id]["status"]=="susceptible":
-            print(G.nodes(data=True)[node_id])
-            print(G.nodes[node_id]["cut_off"])
-            print("got here :0")
-            nextNetwork= update_state_based_on_neighbor(G, node_id)
+#             print(G.nodes(data=True)[node_id])
+#             print(G.nodes[node_id]["cut_off"])
+#             print("got here :1")
+             nextNetwork.nodes[node_id].update(update_state_based_on_neighbor(G, node_id))
            
         else:
-            neighbors= list(G.neighbors(node_id))
-            infected_neighbors = [ node for node in neighbors if G.nodes[node]["status"]=="infected"]
-            if random.random() < link_cutting_prob:
-                for neighbor_node in infected_neighbors:
-                    if nextNetwork.has_edge(node_id, neighbor_node):
-                        nextNetwork.remove_edge(node_id, neighbor_node) #remove link from infected neighbors
-                        print("got here :1")
-                        G.nodes[node]["cut_off"]=True
-            else:
-                count_infected_neighbors=len(infected_neighbors)
-                if count_infected_neighbors >= 5:
-                    if random.random() < 0.3:
-                        nextNetwork.nodes[node_id]["status"]="infected"
-                        nextNetwork.nodes[node_id]["color"]="red"
-                        nextNetwork.nodes[node_id]["counter"]+=1
-                        total_infections+=1
-                else:
-                    nextNetwork.nodes[node_id]["status"]="susceptible"
-                    nextNetwork.nodes[node_id]["counter"]=0
-                    nextNetwork.nodes[node_id]["color"]="green"
-                    
-#         print(G.nodes(data=True)[node_id])
+             if G.nodes[node_id]["cut_off"]:
+                 #print(f"print neighors after cutt off : {[node for node in G.neighbors(node_id)]}")
+                 mobile_nodes = mobile_nodes_in_reg1 + mobile_nodes_in_reg2
+                 nextNetwork.add_edges_from(reconnect_node(node_id,G,mobile_nodes))
+                 nextNetwork.nodes[node_id]["days_since_recovery"]+=1
+                 nextNetwork.nodes[node_id]["cut_off"]=False
+                 #print(f"print neighors after reconnection : {[node for node in nextNetwork.neighbors(node_id)]}")
+             
+             else:  
+                neighbors= list(G.neighbors(node_id))
+                infected_neighbors = [node for node in neighbors if G.nodes[node]["status"]=="infected"]
+                
+                if infected_neighbors:
+                    if random.random() < linkCuttingProb-0.1:
+                        for neighbor_node in infected_neighbors:
+                            if nextNetwork.has_edge(node_id, neighbor_node):
+                                nextNetwork.remove_edge(node_id, neighbor_node) #remove link from infected neighbors
+                                print("got here2 :cut off links")
+                                nextNetwork.nodes[node_id]["cut_off"]=True
 
-                                         
-    #UPDATE POS and region if the current node is a. moving node : i.e. part of the 20% from the strcit region and 70%
-                                                   #from the none region
-    if G.nodes[node_id]["moving"]==True:
-        print(crossing_nodes)
-        print(node_id)
-        nextNetwork= movement(nextNetwork,node_id,crossing_nodes)   
+
+                    elif len(infected_neighbors)/len(neighbors) >= 0.1 :  #if proportion of infected is greater than 60%
+                        if random.random() < 0.2:
+                            nextNetwork.nodes[node_id]["status"]="infected"
+                            nextNetwork.nodes[node_id]["color"]="red"
+                            nextNetwork.nodes[node_id]["counter"]+=1
+                            total_infections+=1
+                            print("got here 3")
+                                
+                        else:
+                            nextNetwork.nodes[node_id]["status"]="susceptible"
+                            nextNetwork.nodes[node_id]["counter"]=0
+                            nextNetwork.nodes[node_id]["color"]="blue"
+                            print("got here 4:")
+                                
+#                     else:
+#                         if G.nodes[node_id]["days_since_recovery"]>10:
+#                             nextNetwork.nodes[node_id]["status"]="susceptible"
+#                             print("recovered got here")
+                        
+#         print(G.nodes(data=True)[node_id])
+        
+    #UPDATE POS and region if the current node is a. 
+    #node : i.e. part of the 20% from the strcit region and 70%
+
+    for node in nextNetwork.nodes:
+        if nextNetwork.nodes[node]["status"]=="infected":
+            total_infections+=1  #from the none region
+        elif nextNetwork.nodes[node]["status"]=="recovered":
+            total_recovery+=1
+        else:
+            pass
+    
+    for node_id in G.nodes:
+        #update nodes positions       
+        if G.nodes[node_id]["moving"]==True:
+            print(f"cross node: {crossing_nodes}")
+            #print("get_here:last")
+            print(G.nodes[node_id]["region"])
+            print(G.nodes[node_id]["pos"])
+            nextNetwork.nodes[node_id].update(movement(G,node_id,crossing_nodes))   
+            print(nextNetwork.nodes[node_id]["region"])
+            print(nextNetwork.nodes[node_id]["pos"])
+
                                                    
     pos = nx.spring_layout(nextNetwork, pos = pos, iterations = 2)            
                 
